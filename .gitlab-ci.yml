@@ -1,0 +1,17 @@
+stages:
+    - deploy
+
+deploy:
+    stage: deploy
+    image: alpine:latest
+    variables:
+        DOCKER_LOGIN_COMMAND: "echo $CI_REGISTRY_PASSWORD | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin"
+    before_script:
+        - apk add --no-cache openssh-client
+    script:
+        - echo "$SSH_PRIVATE_KEY" > private_key.pem
+        - chmod 600 private_key.pem
+        - scp -r -o StrictHostKeyChecking=no -i private_key.pem ./* $DEPLOY_USER@$REMOTE_SERVER:/opt/sharik
+        - ssh -o StrictHostKeyChecking=no -i private_key.pem $DEPLOY_USER@$REMOTE_SERVER "$DOCKER_LOGIN_COMMAND && cd /opt/sharik && docker compose --profile all down && docker compose --profile all up -d"
+    only:
+        - master

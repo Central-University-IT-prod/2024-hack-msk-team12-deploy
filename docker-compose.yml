@@ -1,0 +1,159 @@
+name: sharik-prod
+
+services:
+  app:
+    container_name: app
+    restart: always
+    profiles:
+      - base
+      - all
+    depends_on:
+      db:
+        condition: service_healthy
+    image: {{sensitive_data}}:5050/prod-team-12/shark_serv:latest
+    environment:
+      - POSTGRES_USER={{sensitive_data}}
+      - POSTGRES_DB={{sensitive_data}}
+      - POSTGRES_PASSWORD={{sensitive_data}}
+
+      - SIGNING_KEY={{sensitive_data}}
+      - AWS_ACCESS_KEY_ID={{sensitive_data}}
+      - AWS_SECRET_ACCESS_KEY={{sensitive_data}}
+      - SONAR_TOKEN={{sensitive_data}}
+    networks:
+      - main-net
+    ports:
+      - 8080:8080
+
+  db:
+    container_name: db
+    restart: always
+    profiles:
+      - base
+      - all
+    image: postgres:16
+    environment:
+      - POSTGRES_USER={{sensitive_data}}
+      - POSTGRES_DB={{sensitive_data}}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/password
+    secrets:
+      - source: db-pass
+        target: /run/secrets/password
+    volumes:
+      - db-data:/var/lib/postgresql/data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "sharik"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - main-net
+    ports:
+      - 5432:5432
+
+  prometheus:
+    container_name: prometheus
+    restart: always
+    profiles:
+      - prometheus
+      - all
+    image: bitnami/prometheus:latest
+    command: --web.enable-lifecycle  --config.file=/etc/prometheus/prometheus.yml
+    configs:
+      - source: prometheus-config
+        target: /opt/bitnami/prometheus/conf/prometheus.yml
+    networks:
+      - prometheus-net
+
+  loki:
+    container_name: loki
+    restart: unless-stopped
+    profiles:
+      - loki
+      - all
+    image: grafana/loki:2.9.2
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - loki-net
+
+  promtail:
+    container_name: promtail
+    restart: unless-stopped
+    profiles:
+      - loki
+      - all
+    image: grafana/promtail:2.9.2
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - /var/log:/var/log
+    networks:
+      - loki-net
+
+  grafana:
+    container_name: grafana
+    restart: always
+    profiles:
+      - prometheus
+      - loki
+      - all
+    image: grafana/grafana:latest
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /etc/grafana/provisioning/datasources
+        cat <<EOF > /etc/grafana/provisioning/datasources/ds.yaml
+        apiVersion: 1
+        datasources:
+        - name: Loki
+          type: loki
+          access: proxy 
+          orgId: 1
+          url: http://loki:3100
+          basicAuth: false
+          isDefault: true
+          version: 1
+          editable: false
+        EOF
+        /run.sh
+    # environment:
+    #   - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    #   - GF_AUTH_ANONYMOUS_ENABLED=true
+    #   - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    configs:
+      - source: grafana-ini-config
+        target: /etc/grafana/grafana.ini
+      - source: grafana-datasource-config
+        target: /etc/grafana/provisioning/datasources/datasource.yml
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - loki-net
+      - prometheus-net
+    ports:
+      - 3000:3000
+
+secrets:
+  db-pass:
+    file: ./secrets/db-password
+
+configs:
+  prometheus-config:
+    file: ./prometheus/prometheus.yml
+  grafana-ini-config:
+    file: ./grafana/grafana.ini
+  grafana-datasource-config:
+    file: ./grafana/datasource.yml
+
+volumes:
+  db-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  main-net:
+    driver: bridge
+  loki-net:
+    driver: bridge
+  prometheus-net:
+    driver: bridge
